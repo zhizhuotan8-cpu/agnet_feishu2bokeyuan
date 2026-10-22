@@ -67,6 +67,20 @@ def build_review_card(
         },
     ]
 
+    if payload.get("fallback_to_best"):
+        # 明确告诉人「这不是最后一版，是最好的一版」。通过后又手动重写、分数反而
+        # 掉了的情况也会走到这里，措辞要区分开
+        attempts = int(payload.get("attempts") or 0)
+        attempt = payload.get("best_attempt")
+        where = f"（第 {attempt} 版）" if attempt else ""
+        if passed:
+            line = f"**重写后的版本分数更低，这里展示之前达标的一版{where}**"
+        else:
+            line = f"**{attempts} 个版本都没过线，这里展示得分最高的一版{where}**"
+        elements.append(
+            {"tag": "div", "text": {"tag": "lark_md", "content": line}}
+        )
+
     error = _one_line(evaluation.get("error"), 200)
     veto = _one_line(evaluation.get("veto"), 200)
     if error:
@@ -105,12 +119,15 @@ def build_review_card(
                 "url": review_url,
             }
         )
+    # value 里带上 rewrite_count：重写后旧卡片上的按钮会因为计数对不上被判过期，
+    # 否则点历史卡片的「通过」会作用到新版本上
+    base_value = {"draft_id": draft_id, "rewrite_count": rewrite_count}
     actions.append(
         {
             "tag": "button",
             "text": {"tag": "plain_text", "content": ACTION_LABELS["approve"]},
             "type": "primary",
-            "value": {"action": "approve", "draft_id": draft_id},
+            "value": {"action": "approve", **base_value},
         }
     )
     actions.append(
@@ -119,7 +136,7 @@ def build_review_card(
             "text": {"tag": "plain_text", "content": ACTION_LABELS["rewrite"]},
             "type": "default",
             "disabled": rewrite_count >= max_rewrites,
-            "value": {"action": "rewrite", "draft_id": draft_id},
+            "value": {"action": "rewrite", **base_value},
         }
     )
     actions.append(
@@ -127,7 +144,7 @@ def build_review_card(
             "tag": "button",
             "text": {"tag": "plain_text", "content": ACTION_LABELS["reject"]},
             "type": "danger",
-            "value": {"action": "reject", "draft_id": draft_id},
+            "value": {"action": "reject", **base_value},
         }
     )
     elements.append({"tag": "action", "actions": actions})
@@ -148,6 +165,121 @@ def build_review_card(
         "header": {
             "template": "green" if passed else "red",
             "title": {"tag": "plain_text", "content": f"笔记草稿 · {score_text}/10"},
+        },
+        "elements": elements,
+    }
+
+
+# 结果卡片的状态 → (标题, 头部颜色, 默认说明)
+RESULT_STYLES = {
+    "written": ("已写入飞书", "green", "文档已经建好，点下面的链接就能打开。"),
+    "rejected": ("已丢弃", "grey", "这篇稿子没有写入飞书。"),
+    "rewritten": (
+        "已提交重写",
+        "blue",
+        "正在重新生成，完成后会往群里发一张新的审阅卡片。",
+    ),
+    "write_failed": (
+        "写入失败",
+        "orange",
+        "文档没建成，草稿已回滚到待写入状态。修好原因后可以直接重试，不用重新生成。",
+    ),
+    "error": ("操作失败", "red", "这次操作没有完成，可以回命令行看详细错误。"),
+}
+
+
+def build_result_card(payload: dict[str, Any]) -> dict[str, Any]:
+    """把审阅卡片换成结果卡片：去掉审阅按钮，避免同一张卡被反复点。
+
+    payload 字段：status / draft_id / title / score / doc_url / error / rewrite_count / retryable。
+    写入失败且草稿还停在 approved 时，带一个「重试写入」按钮——这正是最容易
+    出错的一步（文件夹权限、导入任务），不该逼用户回命令行。
+    """
+    status = str(payload.get("status") or "error")
+    title_text, color, default_line = RESULT_STYLES.get(status, RESULT_STYLES["error"])
+    title = _one_line(payload.get("title") or "未命名草稿", 80)
+    draft_id = str(payload.get("draft_id") or "")
+    score = payload.get("score")
+    score_text = f"{float(score):.1f}" if score is not None else "—"
+
+    elements: list[dict[str, Any]] = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "plain_text",
+                "content": f"{title}\n草稿 {draft_id} · {score_text}/10",
+            },
+        },
+        {
+            "tag": "div",
+            "text": {"tag": "lark_md", "content": f"**{title_text}**\n{default_line}"},
+        },
+    ]
+
+    error = _one_line(payload.get("error"), 300)
+    if error:
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": f"<font color='red'>原因：{error}</font>",
+                },
+            }
+        )
+
+    doc_url = str(payload.get("doc_url") or "").strip()
+    if doc_url:
+        elements.append(
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "打开文档"},
+                        "type": "primary",
+                        "url": doc_url,
+                    }
+                ],
+            }
+        )
+
+    if payload.get("retryable"):
+        elements.append(
+            {
+                "tag": "action",
+                "actions": [
+                    {
+                        "tag": "button",
+                        "text": {"tag": "plain_text", "content": "重试写入"},
+                        "type": "primary",
+                        "value": {
+                            "action": "approve",
+                            "draft_id": draft_id,
+                            "rewrite_count": int(payload.get("rewrite_count") or 0),
+                        },
+                    }
+                ],
+            }
+        )
+
+    elements.append(
+        {
+            "tag": "note",
+            "elements": [
+                {
+                    "tag": "plain_text",
+                    "content": "这张卡片已经处理过了，原来的审阅按钮不再有效。",
+                }
+            ],
+        }
+    )
+
+    return {
+        "config": {"wide_screen_mode": True, "update_multi": True},
+        "header": {
+            "template": color,
+            "title": {"tag": "plain_text", "content": f"笔记草稿 · {title_text}"},
         },
         "elements": elements,
     }

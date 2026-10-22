@@ -18,6 +18,15 @@ class NoteState(TypedDict, total=False):
     score: float | None
     verdict: str | None
 
+    # 已经评过分的版本数（含第一版），用来在卡片上说「3 个版本都没过线」
+    attempts: int
+    # 得分最高的一版。返工次数用完还没达标时，交给人的是这个快照而不是最后一版
+    best_content: dict[str, Any] | None
+    best_markdown: str | None
+    best_evaluation: dict[str, Any] | None
+    best_score: float | None
+    best_attempt: int | None
+
     review_action: str | None  # 审阅动作：approve 通过 / reject 拒绝 / rewrite 重写
     review_note: str | None
     review_payload: dict[str, Any] | None

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.adapters.feishu.cards import build_review_card
+from app.adapters.feishu.cards import build_result_card, build_review_card
 
 
 def _payload(**overrides) -> dict:
@@ -93,3 +93,98 @@ def test_evaluator_error_is_shown_as_failure() -> None:
     )
     assert "评估失败" in texts
     assert "一票否决" not in texts
+
+
+def test_card_flags_best_version_when_all_attempts_miss() -> None:
+    card = build_review_card(
+        _payload(
+            score=7.0,
+            verdict="below_bar",
+            rewrite_count=2,
+            attempts=3,
+            fallback_to_best=True,
+            best_attempt=1,
+        )
+    )
+    texts = " ".join(
+        str(element.get("text", {}).get("content", "")) for element in card["elements"]
+    )
+    assert "3 个版本都没过线" in texts
+    assert "第 1 版" in texts
+
+
+def _result_payload(**overrides) -> dict:
+    payload = {
+        "status": "written",
+        "draft_id": "d_1",
+        "title": "Python 的 GIL",
+        "score": 8.6,
+        "doc_url": "https://example.feishu.cn/docx/docx_1",
+        "error": None,
+        "rewrite_count": 1,
+        "retryable": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _result_text(card: dict) -> str:
+    parts = []
+    for element in card["elements"]:
+        if element.get("text"):
+            parts.append(str(element["text"].get("content", "")))
+        for button in element.get("actions") or []:
+            parts.append(str(button.get("text", {}).get("content", "")))
+    return " ".join(parts)
+
+
+def test_result_card_swaps_out_review_buttons() -> None:
+    card = build_result_card(_result_payload())
+    # 结果卡片上不能再有带 action 的按钮，否则同一张卡会被反复点
+    assert _buttons_optional(card) == {}
+    assert card["header"]["template"] == "green"
+    assert "已写入飞书" in _result_text(card)
+
+    links = [
+        button
+        for element in card["elements"]
+        for button in (element.get("actions") or [])
+        if button.get("url")
+    ]
+    assert [b["url"] for b in links] == ["https://example.feishu.cn/docx/docx_1"]
+
+
+def test_result_card_retry_button_carries_rewrite_count() -> None:
+    card = build_result_card(
+        _result_payload(
+            status="write_failed",
+            doc_url=None,
+            error="导入失败：文件夹无权限",
+            retryable=True,
+        )
+    )
+    buttons = _buttons(card)
+    assert list(buttons) == ["approve"]
+    assert buttons["approve"]["text"]["content"] == "重试写入"
+    assert buttons["approve"]["value"]["draft_id"] == "d_1"
+    assert buttons["approve"]["value"]["rewrite_count"] == 1
+
+    text = _result_text(card)
+    assert "写入失败" in text
+    assert "文件夹无权限" in text
+
+
+def test_result_card_rewritten_points_to_new_card() -> None:
+    card = build_result_card(_result_payload(status="rewritten", doc_url=None))
+    assert card["header"]["template"] == "blue"
+    assert "新的审阅卡片" in _result_text(card)
+    assert _buttons_optional(card) == {}
+
+
+def _buttons_optional(card: dict) -> dict[str, dict]:
+    buttons = {}
+    for element in card["elements"]:
+        for button in element.get("actions") or []:
+            if "value" in button:
+                buttons[button["value"]["action"]] = button
+    return buttons

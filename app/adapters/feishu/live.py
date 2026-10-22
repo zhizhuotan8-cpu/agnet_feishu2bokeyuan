@@ -364,6 +364,14 @@ class LiveFeishu:
         card = build_review_card(payload, review_url=review_url)
         return self._send_message(chat_id=chat_id, msg_type="interactive", content=card)
 
+    def update_card(self, *, message_id: str, card: dict[str, Any]) -> None:
+        """把已发出的卡片改成结果卡片（飞书允许更新 14 天内的应用消息）。"""
+        self._request(
+            "PATCH",
+            f"{MESSAGE_PATH}/{_check_token(message_id)}",
+            json_body={"content": json.dumps(card, ensure_ascii=False)},
+        )
+
     # ---------- 自检 ----------
 
     def bot_info(self) -> dict[str, Any]:

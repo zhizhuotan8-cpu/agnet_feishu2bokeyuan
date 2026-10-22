@@ -194,11 +194,30 @@ def build_ingest_graph(
             type_="evaluated",
             payload={"total": evaluation.total, "verdict": evaluation.verdict},
         )
-        return {
+        attempts = int(state.get("attempts") or 0) + 1
+        result: dict[str, Any] = {
             "evaluation": evaluation.model_dump(),
             "score": evaluation.total,
             "verdict": evaluation.verdict,
+            "attempts": attempts,
         }
+        # 顺手记下目前最好的一版：返工次数用完还没达标时，交给人看的是这一版。
+        # 评估器自身报错或一票否决的稿子不参与比较——分数不可信，不该被当成「最好」
+        clean = not evaluation.error and not evaluation.veto
+        best_score = state.get("best_score")
+        if clean and (
+            best_score is None or float(evaluation.total) >= float(best_score)
+        ):
+            result.update(
+                {
+                    "best_content": state.get("content"),
+                    "best_markdown": state.get("markdown"),
+                    "best_evaluation": evaluation.model_dump(),
+                    "best_score": evaluation.total,
+                    "best_attempt": attempts,
+                }
+            )
+        return result
 
     def auto_rewrite(state: NoteState) -> dict[str, Any]:
         """评分未达标时自动返工：计数 +1，把评估建议交给下一轮扩写。"""
@@ -231,19 +250,75 @@ def build_ingest_graph(
         return {"rewrite_count": used, "feedback": feedback}
 
     def prepare_review(state: NoteState) -> dict[str, Any]:
+        draft_id = state["draft_id"]
         content = state.get("content") or {}
         markdown = state.get("markdown") or ""
-        draft = get_draft(db, state["draft_id"]) or {}
+        evaluation = state.get("evaluation") or {}
+        score = state.get("score")
+        verdict = state.get("verdict")
+        attempts = int(state.get("attempts") or 0)
+        fallback = False
+
+        # 返工次数用完仍未达标：把得分最高的一版交给人工，而不是最后一版。
+        # 最后一版通常是「改了但更差」的那次，让人审它没有意义
+        best_score = state.get("best_score")
+        if (
+            verdict != "pass"
+            and best_score is not None
+            and float(score or 0) < float(best_score)
+        ):
+            content = state.get("best_content") or content
+            markdown = state.get("best_markdown") or markdown
+            evaluation = state.get("best_evaluation") or evaluation
+            score = float(best_score)
+            verdict = str(evaluation.get("verdict") or "below_bar")
+            fallback = True
+            # 审阅页、`note-agent show`、通过后写入读的都是库里这一份，所以库里也要换回来
+            write_draft_markdown(settings, draft_id, markdown)
+            update_draft(
+                db,
+                draft_id,
+                markdown=markdown,
+                content_json=json.dumps(content, ensure_ascii=False),
+                score=score,
+                verdict=verdict,
+            )
+            # 预览页读「最近一条评估」，不补一条的话会出现「分数 7 分、扣分项来自 5 分那版」的错位
+            save_evaluation(
+                db,
+                draft_id=draft_id,
+                scores=evaluation.get("scores") or {},
+                total=score,
+                judge_model=judge_model,
+                prompt_version=EVALUATOR_PROMPT_VERSION,
+                detail=evaluation,
+            )
+            add_event(
+                db,
+                draft_id=draft_id,
+                type_="review_best_of",
+                payload={
+                    "score": score,
+                    "attempt": state.get("best_attempt"),
+                    "attempts": attempts,
+                },
+            )
+
+        draft = get_draft(db, draft_id) or {}
         payload = {
-            "draft_id": state["draft_id"],
+            "draft_id": draft_id,
             "title": content.get("title"),
-            "score": state.get("score"),
-            "verdict": state.get("verdict"),
+            "score": score,
+            "verdict": verdict,
             "pass_score": settings.pass_score,
-            "evaluation": state.get("evaluation"),
+            "evaluation": evaluation,
             "excerpt": markdown[:400],
             "rewrite_count": int(draft.get("rewrite_count") or 0),
             "max_rewrites": settings.max_rewrites,
+            # 卡片据此说明「几个版本都没过线，这是得分最高的一版」
+            "attempts": attempts,
+            "fallback_to_best": fallback,
+            "best_attempt": state.get("best_attempt") if fallback else None,
             "markdown_path": str(settings.data_dir / "drafts" / f"{state['draft_id']}.md"),
         }
         add_event(

@@ -75,6 +75,12 @@ class FakeFeishu:
         )
         return message_id
 
+    def update_card(self, *, message_id: str, card: dict[str, Any]) -> None:
+        self._append(
+            "cards.jsonl",
+            json.dumps({"update": message_id, "card": card}, ensure_ascii=False) + "\n",
+        )
+
     def _append(self, name: str, text: str) -> None:
         with (self.dir / name).open("a", encoding="utf-8") as handle:
             handle.write(text)

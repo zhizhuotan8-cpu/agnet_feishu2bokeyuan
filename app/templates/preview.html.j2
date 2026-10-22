@@ -141,6 +141,17 @@
       <span class="meta">模型自评置信度 {{ confidence_label }}</span>
     </div>
 
+    {% if best_of %}
+    <p class="meta">
+      {% if passed %}
+      重写后的版本分数更低，这里展示的是之前达标的一版{% if best_of.attempt %}（第 {{ best_of.attempt }} 版）{% endif %}。
+      {% else %}
+      生成了 {{ best_of.attempts }} 个版本都没到 {{ pass_score }} 分，
+      这里展示的是得分最高的一版{% if best_of.attempt %}（第 {{ best_of.attempt }} 版）{% endif %}。
+      {% endif %}
+    </p>
+    {% endif %}
+
     <div class="dims">
       {% for d in dimensions %}
       <div class="dim">

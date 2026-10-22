@@ -145,6 +145,8 @@ stateDiagram-v2
 
 `AUTO_REWRITE`：分数不到 8 分时走这里——`rewrite_count + 1`，把「上一版得分 + 修改建议 + 扣分项」拼成改稿说明，回到 `EXPAND` 重写。最多 `MAX_REWRITES`（默认 3）次；次数用完仍不达标、或者评估器本身报错（没有建议可用），就直接进 `AWAIT_REVIEW`，把现状交给人。
 
+进 `AWAIT_REVIEW` 时如果还没达标，交出去的是**历次版本里总分最高的那一版**，不是最后一版。评估节点每次都会顺手比较并快照 `best_content / best_markdown / best_evaluation / best_attempt`（评估器报错或有一票否决的版本不参与比较，那种分数不可信）；`prepare_review` 发现当前分数低于历史最高分，就把最好的一版写回草稿行和 `data/drafts/<id>.md`，再补一条评估记录——预览页读的是「最近一条评估」，不补就会出现「分数是最高分、扣分项来自最后一版」的错位。审阅卡片和预览页都会写明「N 个版本都没过线，这是得分最高的一版（第 k 版）」，通过后写入飞书的自然也是这一版。
+
 `AWAIT_REVIEW`：`interrupt()` 暂停，发评分卡片并落 checkpoint；你点按钮后从断点恢复。这是整条链路唯一的阻塞点。
 
 `REWRITE`：人在审阅时主动点重写，同样带上评估反馈重新扩写，`rewrite_count + 1`；和自动返工共用同一个上限，到上限后卡片只剩「通过」「丢弃」。
@@ -322,11 +324,15 @@ class Evaluation(BaseModel):
 
 审阅时草稿还在本地，没有写进飞书——这是「评分通过才记入飞书」的直接结果：审的是一份还没落库的稿子。
 
-卡片控制在手机一屏：标题、总分（达标绿色、未达标红色并标「未达标」）、五个维度的分数条、前三条扣分（带原文引用）、正文前 300 字预览、一个「看全文」链接，三个按钮 `通过写入` / `重写一次` / `丢弃`。标题行会写「重写 已用 x / 3 次」——自动返工消耗的是同一个计数器，所以卡片一打开就知道这篇已经自动重写过几轮。`rewrite_count` 到 3 次后不再显示重写按钮。
+卡片控制在手机一屏：标题、总分（达标绿色、未达标红色并标「未达标」）、五个维度的分数条、前三条扣分（带原文引用）、正文前 300 字预览、一个「看全文」链接，三个按钮 `通过写入` / `重写一次` / `丢弃`。标题行会写「重写 已用 x / 3 次」——自动返工消耗的是同一个计数器，所以卡片一打开就知道这篇已经自动重写过几轮。`rewrite_count` 到 3 次后不再显示重写按钮。返工次数用完仍未达标时，卡片多一行「N 个版本都没过线，这里展示得分最高的一版（第 k 版）」，避免用户误以为是刚生成的最后一版。
 
 预览页 `GET /drafts/{draft_id}` 渲染的就是同一份 Markdown，顶部显示评分明细和同样的按钮，调的是和卡片同一个 resume 接口。手机打不开 `localhost`，所以卡片必须自带 300 字预览，不能只给链接；想在手机看全文就配局域网 IP 或内网穿透，不配也不影响主流程。
 
-状态一致性：卡片和预览页的按钮都带 `draft_id`，resume 前用条件更新 `status = 'awaiting_review'` 才生效。这样两边同时点、或者点了历史消息里的旧卡片，都不会重复写入。
+状态一致性：卡片和预览页的按钮都带 `draft_id`，resume 前用条件更新 `status = 'awaiting_review'` 才生效。这样两边同时点、或者点了历史消息里的旧卡片，都不会重复写入。光靠状态还不够——重写之后草稿仍然是 `awaiting_review`，上一条消息里的旧卡片就又能点了，所以按钮的 value 里还带 `rewrite_count`，回调时拿它和草稿当前计数比，不一致就只回一个 toast「这张卡片已过期」，不执行动作。
+
+**处理完更新原卡片**：resume 结束后把原消息 PATCH 成结果卡片（`PATCH /open-apis/im/v1/messages/{message_id}`，卡片 content 整体替换，14 天内有效）。结果卡片去掉三个审阅按钮，只保留状态、文档链接或失败原因，从根上消灭「同一张卡被反复点」。状态分四种：`written`（带「打开文档」）、`rejected`、`rewritten`（提示去等新卡片）、`write_failed`（红色原因 + 「重试写入」）。更新卡片失败时退回发一条文本消息，不影响主流程。
+
+「重试写入」按钮的 value 是 `action=approve`，回调发现草稿停在 `approved`（写入失败的回滚态）就改调 `retry_write`，只重跑建文档那一段，不重新生成、不重新评分、不消耗重写次数。这也是把最容易出错的一步（文件夹权限、导入任务失败）留给用户自助处理，而不是逼他回命令行。
 
 ### 3.8 写入飞书
 
@@ -579,7 +585,9 @@ POST /open-apis/drive/v1/permissions/{doc_token}/members?type=docx
 
 同时在开发者后台「事件与回调」里只订阅新版 `card.action.trigger`，不要再加 `trigger_v1`，否则同一次点击会收到两份请求、发布两次。
 
-**已实现的回调路径**（`app/feishu_listener.py`）：`P2CardActionTrigger` → 从 `event.action.value` 取 `action` 和 `draft_id` → 查草稿状态，不是 `awaiting_review` 就返回 toast「已处理过」→ 立刻返回 `P2CardActionTriggerResponse`（带 toast）完成 ack → 后台线程调 `resume_note`，再把结果用 `send_text` 发回群。进程内用一把锁串行化，避免同一条卡片的两次点按同时进图。
+**已实现的回调路径**（`app/feishu_listener.py`）：`P2CardActionTrigger` → 从 `event.action.value` 取 `action`、`draft_id`、`rewrite_count`，从 `event.context` 取 `open_chat_id`、`open_message_id` → `check_action` 预检：`written` 直接拒，`approved` 只放行 `approve`（等同于重试写入），`awaiting_review` 再比对 `rewrite_count` → 立刻返回 `P2CardActionTriggerResponse`（带 toast）完成 3 秒 ack → 后台线程调 `resume_note`（`approved` 那条路调 `retry_write`）→ `build_result_card` + `update_card` 改写原消息，失败时退回 `send_text`。
+
+并发保护靠状态而不是内存锁：写入前 `approved → creating_doc` 是带条件的原子更新，同一张卡片连点两次，第二次会拿到 `PublishSkipped` 或发现状态已是 `written`，最终卡片仍显示成功，不会建出第二篇。
 
 ### 6.4 文档回读（链路 B 的地基）
 

@@ -294,6 +294,94 @@ class ErroringEvalLLM(FakeLLM):
         return super().chat_json(system, user, **kwargs)
 
 
+class DecliningLLM(FakeLLM):
+    """分数一轮比一轮低：三版都不过线，第一版反而最好。"""
+
+    def __init__(self, scores: tuple[int, ...] = (7, 6, 5)) -> None:
+        self._scores = list(scores)
+        self.eval_calls = 0
+        self.expand_calls = 0
+
+    def chat_json(self, system: str, user: str, **kwargs):  # type: ignore[override]
+        if "TASK:CRITIQUE" in system:
+            return super().chat_json(system, user, **kwargs)
+        if "TASK:EVALUATE" in system:
+            score = self._scores[min(self.eval_calls, len(self._scores) - 1)]
+            self.eval_calls += 1
+            return {
+                "scores": {
+                    name: score
+                    for name in (
+                        "accuracy",
+                        "specificity",
+                        "density",
+                        "structure",
+                        "readability",
+                    )
+                },
+                "deductions": [],
+                "suggestions": ["补充一个真实可运行的例子"],
+                "veto": None,
+            }
+        draft = super().chat_json(system, user, **kwargs)
+        self.expand_calls += 1
+        # 每版留个标记，方便断言最后被审的是哪一版
+        draft["title"] = f"{draft['title']}（第 {self.expand_calls} 版）"
+        return draft
+
+
+def test_best_version_goes_to_review_when_all_attempts_miss(
+    settings: Settings,
+) -> None:
+    settings = settings.model_copy(update={"max_rewrites": 2})
+    settings.ensure_dirs()
+    init_db(settings.db_path)
+
+    llm = DecliningLLM()
+    reviews: list[dict] = []
+    graph = build_ingest_graph(
+        settings=settings,
+        llm=llm,
+        feishu=FakeFeishu(settings),
+        checkpointer=MemorySaver(),
+        review_hook=reviews.append,
+    )
+    draft = create_draft(
+        settings.db_path, raw_point="取最高分测试", template_version="blog_v1"
+    )
+    draft_id = draft["draft_id"]
+    config = {"configurable": {"thread_id": draft_id}, "recursion_limit": 50}
+
+    graph.invoke(
+        {"draft_id": draft_id, "raw_point": "取最高分测试", "rewrite_count": 0},
+        config,
+    )
+
+    row = get_draft(settings.db_path, draft_id)
+    assert row["status"] == "awaiting_review"
+    assert row["verdict"] == "below_bar"
+    # 三版分别是 7 / 6 / 5 分，交给人的必须是 7 分那版
+    assert float(row["score"]) == 7.0
+    assert int(row["rewrite_count"]) == 2
+    assert llm.expand_calls == 3
+    assert "第 1 版" in row["markdown"]
+    assert "第 3 版" not in row["markdown"]
+
+    assert reviews, "应该发一次审阅"
+    payload = reviews[-1]
+    assert payload["fallback_to_best"] is True
+    assert payload["attempts"] == 3
+    assert payload["best_attempt"] == 1
+    assert float(payload["score"]) == 7.0
+    assert "review_best_of" in _event_types(settings, draft_id)
+
+    # 通过后写进飞书的也必须是这一版，不是最后一版
+    graph.invoke(Command(resume={"action": "approve"}), config)
+    note = get_note_by_draft(settings.db_path, draft_id)
+    assert note is not None
+    assert "第 1 版" in Path(note["local_path"]).read_text(encoding="utf-8")
+
+
 def test_evaluator_error_skips_auto_rewrite(settings: Settings) -> None:
     settings = settings.model_copy(update={"max_rewrites": 3})
     settings.ensure_dirs()

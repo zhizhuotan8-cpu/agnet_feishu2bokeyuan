@@ -12,7 +12,12 @@ from app.agents.scoring import WEIGHTS
 from app.agents.schemas import TEMPLATE_VERSION
 from app.config import Settings
 from app.store.content import read_draft_markdown
-from app.store.db import get_draft, get_note_by_draft, latest_evaluation
+from app.store.db import (
+    get_draft,
+    get_note_by_draft,
+    latest_evaluation,
+    list_events,
+)
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 
@@ -71,6 +76,12 @@ def build_view(settings: Settings, draft_id: str) -> dict[str, Any]:
     scores = _loads(evaluation_row.get("scores_json"))
     detail = _loads(evaluation_row.get("detail_json"))
 
+    # 返工次数用完还没达标时，库里存的是得分最高的一版；事件里记了是哪一版
+    best_of = None
+    for event in list_events(settings.db_path, draft_id):
+        if event.get("type") == "review_best_of":
+            best_of = _loads(event.get("payload_json"))
+
     note = get_note_by_draft(settings.db_path, draft_id) or {}
     content = _loads(draft.get("content_json"))
     markdown = draft.get("markdown") or read_draft_markdown(settings, draft_id)
@@ -113,6 +124,7 @@ def build_view(settings: Settings, draft_id: str) -> dict[str, Any]:
         "rewrite_count": int(draft.get("rewrite_count") or 0),
         "max_rewrites": settings.max_rewrites,
         "can_review": draft["status"] == "awaiting_review",
+        "best_of": best_of,
         "dimensions": dimensions,
         "deductions": deductions,
         "veto": (detail.get("veto") or "").strip() or None,
