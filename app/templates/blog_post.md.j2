@@ -1,0 +1,50 @@
+# {{ title }}
+
+> {{ hook }}
+
+## 一、先说结论
+
+{{ what }}
+
+## 二、为什么是这样
+
+{% for p in why %}
+{{ p }}
+
+{% endfor %}
+## 三、动手试一下
+
+```{{ example_lang }}
+{{ example_code }}
+```
+
+{{ example_note }}
+
+## 四、几个容易踩的坑
+
+{% for p in pitfalls %}
+- **{{ p.title }}**：{{ p.detail }}
+{% endfor %}
+
+## 五、小结
+
+{{ summary }}
+{% if tags %}
+
+**标签**：{{ tags | join(' · ') }}
+{% endif %}
+{% if uncertain_claims %}
+
+> ⚠️ 待核实（发布前请人工确认）
+{% for c in uncertain_claims %}
+> - {{ c }}
+{% endfor %}
+{% endif %}
+{% if refs %}
+
+## 参考
+
+{% for r in refs %}
+- {{ ('[' ~ r.title ~ '](' ~ r.url ~ ')') if r.url else r.title }}
+{% endfor %}
+{% endif %}

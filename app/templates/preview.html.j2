@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} · 审阅</title>
+<style>
+  :root {
+    color-scheme: light;
+    --ink: #1b1f24;
+    --muted: #5b6470;
+    --line: #e4e7ec;
+    --bg: #f7f8fa;
+    --card: #ffffff;
+    --green: #1a7f4b;
+    --amber: #a15c00;
+    --red: #b42318;
+    --blue: #1c4ed8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.7 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .bar {
+    position: sticky; top: 0; z-index: 10; background: rgba(255,255,255,.94);
+    border-bottom: 1px solid var(--line); backdrop-filter: blur(8px);
+  }
+  .bar-inner {
+    max-width: 900px; margin: 0 auto; padding: 12px 20px;
+    display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+  }
+  .brand { font-weight: 600; letter-spacing: .02em; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: #fff; color: var(--ink);
+  }
+  button:hover:not(:disabled) { border-color: #b9c0ca; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--green); border-color: var(--green); color: #fff; }
+  button.danger { color: var(--red); }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 20px 80px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 20px 22px; margin-bottom: 18px;
+  }
+  h1 { font-size: 26px; line-height: 1.35; margin: 4px 0 10px; }
+  .score-row { display: flex; gap: 20px; align-items: baseline; flex-wrap: wrap; }
+  .score { font-size: 44px; font-weight: 700; letter-spacing: -.02em; }
+  .score small { font-size: 15px; font-weight: 400; color: var(--muted); }
+  .score.pass { color: var(--green); }
+  .score.fail { color: var(--red); }
+  .pill {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; border: 1px solid var(--line); color: var(--muted);
+  }
+  .pill.pass { color: var(--green); border-color: #b7e1c6; background: #f0faf4; }
+  .pill.fail { color: var(--red); border-color: #f3c2be; background: #fdf3f2; }
+  .dims { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 16px; }
+  .dim .name { font-size: 13px; color: var(--muted); display: flex; justify-content: space-between; }
+  .track { height: 6px; background: #eceef2; border-radius: 999px; margin-top: 6px; overflow: hidden; }
+  .fill { height: 100%; background: #3b6fd4; border-radius: 999px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  .deduction { border-left: 3px solid var(--red); padding: 4px 0 4px 12px; margin: 12px 0; }
+  .deduction .head { font-size: 13px; color: var(--red); font-weight: 600; }
+  .deduction .quote {
+    margin: 6px 0; padding: 8px 10px; background: #fbf1f0; border-radius: 6px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: #5d2420;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .deduction .reason { color: var(--muted); font-size: 14px; }
+  .unverified { font-size: 12px; color: var(--amber); margin-left: 8px; }
+  .veto {
+    background: #fdf3f2; border: 1px solid #f3c2be; color: var(--red);
+    padding: 12px 14px; border-radius: 8px; margin-bottom: 16px;
+  }
+  .notice {
+    background: #fffaeb; border: 1px solid #f2dfae; color: var(--amber);
+    padding: 10px 14px; border-radius: 8px; margin-bottom: 18px; font-size: 14px;
+  }
+  .uncertain { margin: 0; padding-left: 20px; color: var(--muted); }
+  article { font-size: 16px; line-height: 1.85; }
+  article h1 { font-size: 26px; border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+  article h2 { font-size: 20px; margin: 28px 0 12px; }
+  article h3 { font-size: 17px; }
+  article blockquote {
+    margin: 16px 0; padding: 10px 16px; border-left: 3px solid #d8b45a;
+    background: #fffcf2; color: #6b5a2e;
+  }
+  article pre {
+    background: #14181f; color: #e6edf3; padding: 14px 16px; border-radius: 8px;
+    overflow-x: auto; font-size: 13px; line-height: 1.6;
+  }
+  article code { font-family: ui-monospace, Consolas, monospace; }
+  article :not(pre) > code { background: #eef0f4; padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+  article table { border-collapse: collapse; width: 100%; }
+  article th, article td { border: 1px solid var(--line); padding: 8px 10px; }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 24px; }
+  #msg { font-size: 13px; color: var(--muted); }
+  #msg.error { color: var(--red); }
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="bar-inner">
+    <span class="brand">飞书笔记 · 审阅</span>
+    <span class="meta">{{ draft_id }} · {{ status_label }}</span>
+    <span class="spacer"></span>
+    <span id="msg"></span>
+    {% if can_review and not static %}
+    <button class="primary" onclick="review('approve')">通过并写入</button>
+    <button onclick="review('rewrite')" {% if rewrite_count >= max_rewrites %}disabled{% endif %}>重写一次</button>
+    <button class="danger" onclick="review('reject')">拒绝</button>
+    {% endif %}
+  </div>
+</div>
+
+<main>
+  {% if static %}
+  <div class="notice">这是静态预览，按钮不可用。要直接点通过/拒绝，请运行 <code>note-agent serve</code> 后打开对应草稿页。</div>
+  {% endif %}
+  {% if status != 'awaiting_review' %}
+  <div class="notice">当前状态：{{ status_label }}{% if doc_url %} · 文档 {{ doc_url }}{% endif %}。只有待审阅的草稿可以操作。</div>
+  {% endif %}
+
+  <div class="card">
+    <span class="pill {{ 'pass' if passed else 'fail' }}">
+      {{ '达标' if passed else '未达标' }} · 门槛 {{ pass_score }}
+    </span>
+    <h1>{{ title }}</h1>
+    <div class="score-row">
+      <span class="score {{ 'pass' if passed else 'fail' }}">{{ '%.1f'|format(score) }}<small> / 10</small></span>
+      {% if score < pass_score %}
+      <span class="meta">低于 {{ pass_score }} 分，可以重写一次，也可以强行通过。</span>
+      {% else %}
+      <span class="meta">达到门槛，确认内容后写入飞书。</span>
+      {% endif %}
+      <span class="meta">已重写 {{ rewrite_count }} / {{ max_rewrites }} 次</span>
+      <span class="meta">模型自评置信度 {{ confidence_label }}</span>
+    </div>
+
+    <div class="dims">
+      {% for d in dimensions %}
+      <div class="dim">
+        <div class="name"><span>{{ d.label }}</span><span>{{ d.score }} · 权重 {{ '%.2f'|format(d.weight) }}</span></div>
+        <div class="track"><div class="fill" style="width: {{ d.score * 10 }}%"></div></div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="veto"><strong>评估失败：</strong>{{ error }}</div>
+  {% endif %}
+
+  {% if veto %}
+  <div class="veto"><strong>一票否决：</strong>{{ veto }}</div>
+  {% endif %}
+
+  {% if deductions %}
+  <div class="card">
+    <h2>扣分项（{{ deductions|length }}）</h2>
+    {% for d in deductions %}
+    <div class="deduction">
+      <div class="head">{{ d.dimension_label }} · -{{ '%.1f'|format(d.points) }} 分</div>
+      {% if d.quote %}<div class="quote">{{ d.quote }}</div>{% endif %}
+      <div class="reason">{{ d.reason }}{% if d.quote and not d.quote_verified %}<span class="unverified">引用未在正文中找到，请人工核对</span>{% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if uncertain_claims %}
+  <div class="card">
+    <h2>模型自己标记的待核实点</h2>
+    <ul class="uncertain">
+      {% for item in uncertain_claims %}<li>{{ item }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <article>{{ body|safe }}</article>
+    <div class="foot">草稿 {{ draft_id }} · 模板 {{ template_version }} · 更新于 {{ updated_at }}</div>
+  </div>
+</main>
+
+<script>
+  const DRAFT_ID = "{{ draft_id }}";
+  const msg = document.getElementById("msg");
+
+  async function review(action) {
+    const labels = { approve: "通过并写入飞书", rewrite: "重写一次", reject: "拒绝这篇草稿" };
+    if (!confirm(labels[action] + "？")) return;
+    msg.className = "";
+    msg.textContent = "处理中…";
+    document.querySelectorAll("button").forEach(b => b.disabled = true);
+    try {
+      const resp = await fetch("/api/drafts/" + encodeURIComponent(DRAFT_ID) + "/review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: action })
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.detail || ("HTTP " + resp.status));
+      if (data.next_draft_id) {
+        location.href = "/drafts/" + data.next_draft_id;
+        return;
+      }
+      location.href = "/drafts/" + DRAFT_ID;
+    } catch (err) {
+      msg.className = "error";
+      msg.textContent = "操作失败：" + err.message;
+      document.querySelectorAll("button").forEach(b => b.disabled = false);
+    }
+  }
+</script>
+</body>
+</html>
