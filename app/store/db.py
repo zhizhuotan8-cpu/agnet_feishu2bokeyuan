@@ -79,9 +79,9 @@ CREATE TABLE IF NOT EXISTS events (
 );
 """
 
-# 草稿状态流转：
-# awaiting_review -> approved -> creating_doc -> written
-#                \-> rejected / discarded
+# 草稿状态流转（括号里是中文含义，状态值本身要跟代码/卡片保持一致，不翻译）：
+# awaiting_review（待审阅）-> approved（已通过）-> creating_doc（建文档中）-> written（已写入）
+#                        \-> rejected（已拒绝）/ discarded（已作废）
 DRAFT_STATUSES = (
     "awaiting_review",
     "approved",

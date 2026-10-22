@@ -18,7 +18,7 @@ class NoteState(TypedDict, total=False):
     score: float | None
     verdict: str | None
 
-    review_action: str | None  # approve / reject / rewrite
+    review_action: str | None  # 审阅动作：approve 通过 / reject 拒绝 / rewrite 重写
     review_note: str | None
     review_payload: dict[str, Any] | None
     rewrite_count: int
